@@ -18,12 +18,49 @@ app.use(cors({
 // Set these in Render dashboard — NEVER hardcode them here
 // ============================================================
 const {
-  FLW_SECRET_KEY,        // Your Flutterwave secret key
-  FLW_SECRET_HASH,       // Your Flutterwave webhook secret hash
-  GMAIL_USER,            // Your Gmail address e.g. primeresume.app@gmail.com
-  GMAIL_APP_PASSWORD,    // Your Gmail app password (16 chars)
+  FLW_SECRET_KEY,
+  FLW_SECRET_HASH,
+  GMAIL_USER,
+  GMAIL_APP_PASSWORD,
+  GEMINI_API_KEY,
   PORT = 3000
 } = process.env;
+
+// ============================================================
+// RATE LIMITING — Prevent API abuse
+// ============================================================
+const requestCounts = {};
+
+function checkRateLimit(ip) {
+  const now = Date.now();
+  const windowMs = 60 * 60 * 1000; // 1 hour
+  const maxRequests = 20; // max 20 AI requests per hour per IP
+
+  if (!requestCounts[ip]) {
+    requestCounts[ip] = { count: 1, resetAt: now + windowMs };
+    return true;
+  }
+
+  if (now > requestCounts[ip].resetAt) {
+    requestCounts[ip] = { count: 1, resetAt: now + windowMs };
+    return true;
+  }
+
+  if (requestCounts[ip].count >= maxRequests) {
+    return false;
+  }
+
+  requestCounts[ip].count++;
+  return true;
+}
+
+// Clean up old entries every hour
+setInterval(() => {
+  const now = Date.now();
+  Object.keys(requestCounts).forEach(ip => {
+    if (now > requestCounts[ip].resetAt) delete requestCounts[ip];
+  });
+}, 60 * 60 * 1000);
 
 // ============================================================
 // GENERATE ACTIVATION CODE
@@ -203,6 +240,159 @@ app.get('/generate-test-code', (req, res) => {
   }
   const code = generateActivationCode();
   res.json({ code });
+});
+
+// ============================================================
+// GEMINI AI ENDPOINTS
+// ============================================================
+
+// Call Gemini helper function
+async function callGemini(prompt) {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.7, maxOutputTokens: 1000 }
+      })
+    }
+  );
+  const data = await response.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+}
+
+// Job Match Analyzer
+app.post('/ai/job-match', async (req, res) => {
+  const ip = req.ip;
+  if (!checkRateLimit(ip)) {
+    return res.status(429).json({ error: 'Rate limit exceeded. Try again in an hour.' });
+  }
+
+  const { resume, jobDescription } = req.body;
+  if (!resume || !jobDescription) {
+    return res.status(400).json({ error: 'Missing resume or job description' });
+  }
+
+  try {
+    const prompt = `You are a professional resume coach. Analyze how well this resume matches the job description.
+
+RESUME:
+${resume}
+
+JOB DESCRIPTION:
+${jobDescription}
+
+Respond in this exact JSON format:
+{
+  "score": <number 0-100>,
+  "verdict": "<one sentence summary>",
+  "matching": ["skill1", "skill2", "skill3"],
+  "missing": ["skill1", "skill2", "skill3"],
+  "suggestions": ["suggestion1", "suggestion2", "suggestion3"]
+}
+Only respond with the JSON. No extra text.`;
+
+    const result = await callGemini(prompt);
+    const clean = result.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(clean);
+    res.json(parsed);
+  } catch (error) {
+    console.error('Job match error:', error);
+    res.status(500).json({ error: 'Analysis failed. Please try again.' });
+  }
+});
+
+// Quick Resume Builder — text/voice transcript to resume fields
+app.post('/ai/quick-resume', async (req, res) => {
+  const ip = req.ip;
+  if (!checkRateLimit(ip)) {
+    return res.status(429).json({ error: 'Rate limit exceeded. Try again in an hour.' });
+  }
+
+  const { text } = req.body;
+  if (!text) return res.status(400).json({ error: 'Missing text' });
+
+  try {
+    const prompt = `Extract resume information from this text and return it as JSON.
+
+TEXT:
+${text}
+
+Return ONLY this JSON format:
+{
+  "fullName": "",
+  "jobTitle": "",
+  "email": "",
+  "phone": "",
+  "city": "",
+  "state": "",
+  "summary": "",
+  "skills": [],
+  "experiences": [{"title": "", "company": "", "start": "", "end": "", "desc": ""}],
+  "educations": [{"degree": "", "school": "", "start": "", "end": ""}]
+}
+Fill in only what you can find. Leave others empty. Only respond with JSON.`;
+
+    const result = await callGemini(prompt);
+    const clean = result.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(clean);
+    res.json(parsed);
+  } catch (error) {
+    console.error('Quick resume error:', error);
+    res.status(500).json({ error: 'Could not process text. Please try again.' });
+  }
+});
+
+// Achievement Improver
+app.post('/ai/improve-achievement', async (req, res) => {
+  const ip = req.ip;
+  if (!checkRateLimit(ip)) {
+    return res.status(429).json({ error: 'Rate limit exceeded. Try again in an hour.' });
+  }
+
+  const { achievement, jobTitle } = req.body;
+  if (!achievement) return res.status(400).json({ error: 'Missing achievement' });
+
+  try {
+    const prompt = `Improve this resume bullet point to be more impactful and results-focused.
+Job title context: ${jobTitle || 'Professional'}
+Original: ${achievement}
+
+Return ONLY the improved version. One sentence. Start with a strong action verb. Include metrics if possible. No explanation.`;
+
+    const result = await callGemini(prompt);
+    res.json({ improved: result.trim() });
+  } catch (error) {
+    res.status(500).json({ error: 'Could not improve achievement. Try again.' });
+  }
+});
+
+// Summary Generator
+app.post('/ai/generate-summary', async (req, res) => {
+  const ip = req.ip;
+  if (!checkRateLimit(ip)) {
+    return res.status(429).json({ error: 'Rate limit exceeded. Try again in an hour.' });
+  }
+
+  const { name, jobTitle, skills, experience } = req.body;
+  if (!jobTitle) return res.status(400).json({ error: 'Missing job title' });
+
+  try {
+    const prompt = `Write a professional resume summary for this person.
+Name: ${name || 'Professional'}
+Job Title: ${jobTitle}
+Skills: ${(skills || []).join(', ')}
+Experience: ${experience || 'Not provided'}
+
+Write 2-3 sentences. Professional tone. No first person. Start with the job title. Return only the summary text.`;
+
+    const result = await callGemini(prompt);
+    res.json({ summary: result.trim() });
+  } catch (error) {
+    res.status(500).json({ error: 'Could not generate summary. Try again.' });
+  }
 });
 
 // ============================================================
