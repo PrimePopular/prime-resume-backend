@@ -9,7 +9,7 @@ const cors = require('cors');
 const app = express();
 app.use(express.json());
 app.use(cors({
-  origin: '*', // Replace with your actual domain when live
+  origin: ['https://primepopular.github.io', 'http://localhost:3000'],
   methods: ['GET', 'POST']
 }));
 
