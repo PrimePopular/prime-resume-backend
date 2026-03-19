@@ -64,7 +64,8 @@ setInterval(() => {
 
 // ============================================================
 // GENERATE ACTIVATION CODE
-// Creates a unique 16-character code for each payment
+// Embeds purchase timestamp so expiry can be verified client side
+// Format: PR-XXXX-XXXX-XXXX-TIMESTAMP(base36)
 // ============================================================
 function generateActivationCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -73,7 +74,9 @@ function generateActivationCode() {
     if (i === 4 || i === 8) code += '-';
     code += chars[Math.floor(Math.random() * chars.length)];
   }
-  return code; // Format: PR-XXXX-XXXX-XXXX
+  // Append purchase timestamp in base36 (compact)
+  const timestamp = Date.now().toString(36).toUpperCase();
+  return code + '-' + timestamp; // Format: PR-XXXX-XXXX-XXXX-TIMESTAMP
 }
 
 // ============================================================
