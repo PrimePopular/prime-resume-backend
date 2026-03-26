@@ -135,13 +135,10 @@ async function callGemini(prompt, maxTokens = 1000) {
   }
 
   // Try gemini-2.0-flash first, fall back to 1.5-flash
-  // Model list — ordered by preference. Uses v1 API (stable).
   const candidates = [
-    { api: 'v1', model: 'gemini-1.5-flash-001' },
-    { api: 'v1', model: 'gemini-1.5-flash' },
-    { api: 'v1', model: 'gemini-1.0-pro' },
-    { api: 'v1beta', model: 'gemini-1.5-flash' },
-    { api: 'v1beta', model: 'gemini-pro' },
+    { api: 'v1beta', model: 'gemini-2.0-flash' },
+    { api: 'v1beta', model: 'gemini-2.0-flash-001' },
+    { api: 'v1beta', model: 'gemini-2.0-flash-lite' },
   ];
   let lastError = null;
 
@@ -419,24 +416,22 @@ Experience context: ${experience || 'Not provided'}`;
 });
 
 // ── DIAGNOSTIC: List available models ────────────────────────
-// Visit this URL to see which models your API key can access
 app.get('/list-models', async (req, res) => {
-  if (!GEMINI_API_KEY) {
-    return res.status(500).json({ error: 'GEMINI_API_KEY not set' });
+  if (!GEMINI_API_KEY) return res.status(500).json({ error: 'GEMINI_API_KEY not set' });
+  const results = {};
+  for (const api of ['v1', 'v1beta']) {
+    try {
+      const r = await fetch(`https://generativelanguage.googleapis.com/${api}/models?key=${GEMINI_API_KEY}`);
+      const data = await r.json();
+      if (data.error) { results[api] = { error: data.error.message }; continue; }
+      results[api] = (data.models || [])
+        .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
+        .map(m => m.name);
+    } catch (err) {
+      results[api] = { error: err.message };
+    }
   }
-  try {
-    const r = await fetch(
-      `https://generativelanguage.googleapis.com/v1/models?key=${GEMINI_API_KEY}`
-    );
-    const data = await r.json();
-    if (data.error) return res.status(500).json({ error: data.error.message });
-    const models = (data.models || [])
-      .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
-      .map(m => m.name);
-    res.json({ available_models: models, count: models.length });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  res.json(results);
 });
 
 // ── TEST ENDPOINT ─────────────────────────────────────────────
