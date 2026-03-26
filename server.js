@@ -135,7 +135,7 @@ async function callGemini(prompt, maxTokens = 1000) {
   }
 
   // Try gemini-2.0-flash first, fall back to 1.5-flash
-  const models = ['gemini-2.0-flash', 'gemini-1.5-flash-latest', 'gemini-1.5-flash'];
+  const models = ['gemini-1.5-flash', 'gemini-1.5-flash-latest', 'gemini-1.5-pro'];
   let lastError = null;
 
   for (const model of models) {
