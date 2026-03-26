@@ -1,5 +1,5 @@
-// server.js — Prime Resume Payment Backend
-// Handles Flutterwave payment verification and activation code delivery
+// server.js — Prime Resume Backend
+// Handles Flutterwave payments + Gemini AI endpoints
 
 const express = require('express');
 const crypto = require('crypto');
@@ -9,13 +9,13 @@ const cors = require('cors');
 const app = express();
 app.use(express.json());
 app.use(cors({
-  origin: ['https://primepopular.github.io', 'http://localhost:3000'],
-  methods: ['GET', 'POST']
+  origin: ['https://primepopular.github.io', 'http://localhost:3000', 'http://127.0.0.1:5500'],
+  methods: ['GET', 'POST'],
+  credentials: false
 }));
 
 // ============================================================
 // ENVIRONMENT VARIABLES
-// Set these in Render dashboard — NEVER hardcode them here
 // ============================================================
 const {
   FLW_SECRET_KEY,
@@ -27,34 +27,28 @@ const {
 } = process.env;
 
 // ============================================================
-// RATE LIMITING — Prevent API abuse
+// RATE LIMITING
 // ============================================================
 const requestCounts = {};
 
 function checkRateLimit(ip) {
   const now = Date.now();
-  const windowMs = 60 * 60 * 1000; // 1 hour
-  const maxRequests = 20; // max 20 AI requests per hour per IP
+  const windowMs = 60 * 60 * 1000;
+  const maxRequests = 20;
 
   if (!requestCounts[ip]) {
     requestCounts[ip] = { count: 1, resetAt: now + windowMs };
     return true;
   }
-
   if (now > requestCounts[ip].resetAt) {
     requestCounts[ip] = { count: 1, resetAt: now + windowMs };
     return true;
   }
-
-  if (requestCounts[ip].count >= maxRequests) {
-    return false;
-  }
-
+  if (requestCounts[ip].count >= maxRequests) return false;
   requestCounts[ip].count++;
   return true;
 }
 
-// Clean up old entries every hour
 setInterval(() => {
   const now = Date.now();
   Object.keys(requestCounts).forEach(ip => {
@@ -63,9 +57,7 @@ setInterval(() => {
 }, 60 * 60 * 1000);
 
 // ============================================================
-// GENERATE ACTIVATION CODE
-// Embeds purchase timestamp so expiry can be verified client side
-// Format: PR-XXXX-XXXX-XXXX-TIMESTAMP(base36)
+// ACTIVATION CODE GENERATOR
 // ============================================================
 function generateActivationCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -74,105 +66,165 @@ function generateActivationCode() {
     if (i === 4 || i === 8) code += '-';
     code += chars[Math.floor(Math.random() * chars.length)];
   }
-  // Append purchase timestamp in base36 (compact)
   const timestamp = Date.now().toString(36).toUpperCase();
-  return code + '-' + timestamp; // Format: PR-XXXX-XXXX-XXXX-TIMESTAMP
+  return code + '-' + timestamp;
 }
 
 // ============================================================
-// SEND ACTIVATION CODE EMAIL
+// SEND ACTIVATION EMAIL
 // ============================================================
 async function sendActivationEmail(toEmail, toName, code) {
   const transporter = nodemailer.createTransport({
     service: 'gmail',
-    auth: {
-      user: GMAIL_USER,
-      pass: GMAIL_APP_PASSWORD
-    }
+    auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD }
   });
 
-  const mailOptions = {
+  await transporter.sendMail({
     from: `Prime Resume <${GMAIL_USER}>`,
     to: toEmail,
     subject: '✅ Your Prime Resume Activation Code',
     html: `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <style>
-          body { font-family: 'Segoe UI', Arial, sans-serif; background: #f5f5f5; margin: 0; padding: 0; }
-          .container { max-width: 520px; margin: 2rem auto; background: white; border-radius: 4px; overflow: hidden; box-shadow: 0 2px 20px rgba(0,0,0,0.08); }
-          .header { background: #0a0a0a; padding: 2rem; text-align: center; }
-          .logo { color: #c9a84c; font-size: 1.2rem; font-weight: 800; letter-spacing: 0.1em; }
-          .body { padding: 2rem 2.5rem; }
-          .greeting { font-size: 1rem; color: #333; margin-bottom: 1rem; }
-          .code-box { background: #0a0a0a; border: 2px solid #c9a84c; border-radius: 4px; padding: 1.5rem; text-align: center; margin: 1.5rem 0; }
-          .code-label { color: #888; font-size: 0.75rem; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.5rem; }
-          .code { color: #c9a84c; font-size: 1.6rem; font-weight: 800; letter-spacing: 0.15em; font-family: monospace; }
-          .instructions { background: #f9f9f9; border-left: 3px solid #c9a84c; padding: 1rem 1.2rem; margin: 1.5rem 0; font-size: 0.85rem; color: #555; line-height: 1.7; }
-          .instructions ol { margin: 0.5rem 0 0 1rem; padding: 0; }
-          .instructions li { margin-bottom: 0.3rem; }
-          .btn { display: block; text-align: center; background: #c9a84c; color: #000; padding: 0.9rem; border-radius: 2px; text-decoration: none; font-weight: 700; font-size: 0.88rem; letter-spacing: 0.08em; text-transform: uppercase; margin: 1.5rem 0; }
-          .footer { padding: 1.5rem 2.5rem; border-top: 1px solid #eee; font-size: 0.75rem; color: #aaa; line-height: 1.6; }
-          .validity { color: #888; font-size: 0.78rem; text-align: center; margin-top: 0.5rem; }
-        </style>
-      </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <div class="logo">PRIME RESUME</div>
+      <!DOCTYPE html><html><head>
+      <style>
+        body{font-family:'Segoe UI',Arial,sans-serif;background:#f5f5f5;margin:0;padding:0;}
+        .container{max-width:520px;margin:2rem auto;background:white;border-radius:4px;overflow:hidden;box-shadow:0 2px 20px rgba(0,0,0,0.08);}
+        .header{background:#0a0a0a;padding:2rem;text-align:center;}
+        .logo{color:#c9a84c;font-size:1.2rem;font-weight:800;letter-spacing:0.1em;}
+        .body{padding:2rem 2.5rem;}
+        .code-box{background:#0a0a0a;border:2px solid #c9a84c;border-radius:4px;padding:1.5rem;text-align:center;margin:1.5rem 0;}
+        .code-label{color:#888;font-size:0.75rem;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:0.5rem;}
+        .code{color:#c9a84c;font-size:1.6rem;font-weight:800;letter-spacing:0.15em;font-family:monospace;}
+        .instructions{background:#f9f9f9;border-left:3px solid #c9a84c;padding:1rem 1.2rem;margin:1.5rem 0;font-size:0.85rem;color:#555;line-height:1.7;}
+        .footer{padding:1.5rem 2.5rem;border-top:1px solid #eee;font-size:0.75rem;color:#aaa;line-height:1.6;}
+      </style></head><body>
+      <div class="container">
+        <div class="header"><div class="logo">PRIME RESUME</div></div>
+        <div class="body">
+          <p style="color:#333">Hi ${toName || 'there'},</p>
+          <p style="color:#555;font-size:0.9rem;line-height:1.7">Thank you for upgrading! Your payment was successful. Here is your activation code:</p>
+          <div class="code-box">
+            <div class="code-label">Your Activation Code</div>
+            <div class="code">${code}</div>
           </div>
-          <div class="body">
-            <p class="greeting">Hi ${toName || 'there'},</p>
-            <p style="color:#555;font-size:0.9rem;line-height:1.7">
-              Thank you for upgrading to Prime Resume Premium! Your payment was successful.
-              Here is your activation code:
-            </p>
-            <div class="code-box">
-              <div class="code-label">Your Activation Code</div>
-              <div class="code">${code}</div>
-            </div>
-            <div class="instructions">
-              <strong>How to activate:</strong>
-              <ol>
-                <li>Go to <strong>primeresume.app/pricing.html</strong></li>
-                <li>Scroll down to <strong>"Already paid? Activate here"</strong></li>
-                <li>Enter your code and click <strong>Activate</strong></li>
-                <li>Enjoy 40 days of Premium access!</li>
-              </ol>
-            </div>
-            <p class="validity">⏱ Valid for <strong>40 days</strong> from activation. One-time use.</p>
-            <p style="color:#aaa;font-size:0.78rem;margin-top:1.5rem;line-height:1.6">
-              Keep this email safe — your code is stored only on the device where you activate it.
-              If you need help, reply to this email.
-            </p>
+          <div class="instructions">
+            <strong>How to activate:</strong><br/>
+            1. Go to your Prime Resume builder<br/>
+            2. Click the <strong>⭐ Premium</strong> button in the top bar<br/>
+            3. Enter your code and click <strong>Activate</strong><br/>
+            4. Enjoy 40 days of Premium access!
           </div>
-          <div class="footer">
-            <p>© Prime Resume. Built for privacy.</p>
-            <p>If you did not make this purchase, please reply to this email immediately.</p>
-          </div>
+          <p style="color:#aaa;font-size:0.78rem;margin-top:1.5rem;line-height:1.6">
+            Valid for <strong>40 days</strong>. Keep this email safe — your code is stored only on the end where you activate it.
+          </p>
         </div>
-      </body>
-      </html>
-    `
-  };
+        <div class="footer">
+          <p>© Prime Resume. Built for privacy.</p>
+          <p>If you did not make this purchase, reply to this email immediately.</p>
+        </div>
+      </div>
+      </body></html>`
+  });
+}
 
-  await transporter.sendMail(mailOptions);
+// ============================================================
+// GEMINI AI HELPER — with proper error handling
+// ============================================================
+async function callGemini(prompt, maxTokens = 1000) {
+  if (!GEMINI_API_KEY) {
+    throw new Error('Gemini API key not configured on server');
+  }
+
+  // Try gemini-2.0-flash first, fall back to 1.5-flash
+  const models = ['gemini-2.0-flash', 'gemini-1.5-flash-latest', 'gemini-1.5-flash'];
+  let lastError = null;
+
+  for (const model of models) {
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: {
+              temperature: 0.4,
+              maxOutputTokens: maxTokens,
+              topP: 0.8
+            }
+          })
+        }
+      );
+
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error(`Gemini ${model} HTTP ${response.status}:`, errText);
+        lastError = new Error(`Gemini API error ${response.status}`);
+        continue; // try next model
+      }
+
+      const data = await response.json();
+
+      // Check for API-level errors
+      if (data.error) {
+        console.error(`Gemini ${model} API error:`, data.error);
+        lastError = new Error(data.error.message || 'Gemini API error');
+        continue;
+      }
+
+      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!text || text.trim() === '') {
+        console.error(`Gemini ${model} returned empty text. Full response:`, JSON.stringify(data));
+        lastError = new Error('Gemini returned empty response');
+        continue;
+      }
+
+      console.log(`Gemini ${model} success, response length: ${text.length}`);
+      return text;
+    } catch (err) {
+      console.error(`Gemini ${model} fetch error:`, err.message);
+      lastError = err;
+      continue;
+    }
+  }
+
+  throw lastError || new Error('All Gemini models failed');
+}
+
+// Safe JSON parser — strips markdown code fences
+function parseGeminiJSON(text) {
+  if (!text || text.trim() === '') {
+    throw new Error('Empty response from AI');
+  }
+  // Strip ```json ... ``` or ``` ... ``` fences
+  let clean = text.trim();
+  clean = clean.replace(/^```json\s*/i, '').replace(/^```\s*/i, '');
+  clean = clean.replace(/\s*```$/i, '');
+  clean = clean.trim();
+
+  // Find the first { and last } to extract JSON object
+  const start = clean.indexOf('{');
+  const end = clean.lastIndexOf('}');
+  if (start === -1 || end === -1) {
+    console.error('No JSON object found in:', clean.substring(0, 200));
+    throw new Error('AI response did not contain valid JSON');
+  }
+  clean = clean.substring(start, end + 1);
+
+  return JSON.parse(clean);
 }
 
 // ============================================================
 // ROUTES
 // ============================================================
 
-// Health check — Render uses this to confirm server is alive
 app.get('/', (req, res) => {
-  res.json({ status: 'Prime Resume server is running' });
+  res.json({ status: 'Prime Resume server is running', version: '2.0' });
 });
 
-// Flutterwave webhook — called automatically when payment succeeds
+// ── FLUTTERWAVE WEBHOOK ──────────────────────────────────────
 app.post('/webhook/flutterwave', async (req, res) => {
   try {
-    // Step 1: Verify the webhook is genuinely from Flutterwave
     const hash = req.headers['verif-hash'];
     if (!hash || hash !== FLW_SECRET_HASH) {
       console.log('Invalid webhook hash — rejected');
@@ -180,150 +232,117 @@ app.post('/webhook/flutterwave', async (req, res) => {
     }
 
     const payload = req.body;
-
-    // Step 2: Only process successful charge events
     if (payload.event !== 'charge.completed') {
       return res.status(200).json({ message: 'Event ignored' });
     }
 
     const data = payload.data;
-
-    // Step 3: Verify payment status and amount
     if (data.status !== 'successful') {
       return res.status(200).json({ message: 'Payment not successful' });
     }
-
-    // Step 4: Verify amount is correct ($3 USD or equivalent)
-    const expectedAmount = 3;
-    if (data.amount < expectedAmount) {
+    if (data.amount < 3) {
       console.log(`Amount too low: ${data.amount}`);
       return res.status(200).json({ message: 'Amount mismatch' });
     }
 
-    // Step 5: Verify with Flutterwave API directly (double check)
+    // Verify with Flutterwave directly
     const verifyResponse = await fetch(
       `https://api.flutterwave.com/v3/transactions/${data.id}/verify`,
-      {
-        headers: {
-          Authorization: `Bearer ${FLW_SECRET_KEY}`,
-          'Content-Type': 'application/json'
-        }
-      }
+      { headers: { Authorization: `Bearer ${FLW_SECRET_KEY}`, 'Content-Type': 'application/json' } }
     );
     const verifyData = await verifyResponse.json();
-
     if (verifyData.data.status !== 'successful') {
       console.log('Verification failed');
       return res.status(200).json({ message: 'Verification failed' });
     }
 
-    // Step 6: Generate activation code
     const code = generateActivationCode();
     const customerEmail = data.customer.email;
     const customerName = data.customer.name || '';
 
     console.log(`Payment verified for ${customerEmail} — Code: ${code}`);
-
-    // Step 7: Send activation code email
     await sendActivationEmail(customerEmail, customerName, code);
     console.log(`Activation email sent to ${customerEmail}`);
 
     res.status(200).json({ message: 'Success' });
-
   } catch (error) {
     console.error('Webhook error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Manual code generation endpoint (for testing only — disable in production)
-app.get('/generate-test-code', (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(403).json({ error: 'Disabled in production' });
-  }
-  const code = generateActivationCode();
-  res.json({ code });
-});
-
-// ============================================================
-// GEMINI AI ENDPOINTS
-// ============================================================
-
-// Call Gemini helper function
-async function callGemini(prompt) {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { temperature: 0.7, maxOutputTokens: 1000 }
-      })
-    }
-  );
-  const data = await response.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-}
-
-// Job Match Analyzer
+// ── AI: JOB MATCH ANALYZER ──────────────────────────────────
 app.post('/ai/job-match', async (req, res) => {
-  const ip = req.ip;
+  const ip = req.ip || req.connection.remoteAddress;
   if (!checkRateLimit(ip)) {
     return res.status(429).json({ error: 'Rate limit exceeded. Try again in an hour.' });
   }
 
   const { resume, jobDescription } = req.body;
-  if (!resume || !jobDescription) {
-    return res.status(400).json({ error: 'Missing resume or job description' });
+
+  if (!resume || typeof resume !== 'string' || resume.trim().length < 10) {
+    return res.status(400).json({ error: 'Missing or invalid resume text' });
+  }
+  if (!jobDescription || typeof jobDescription !== 'string' || jobDescription.trim().length < 10) {
+    return res.status(400).json({ error: 'Missing or invalid job description' });
   }
 
   try {
-    const prompt = `You are a professional resume coach. Analyze how well this resume matches the job description.
+    const prompt = `You are an expert ATS resume coach. Analyze how well this resume matches the job description.
 
 RESUME:
-${resume}
+${resume.substring(0, 3000)}
 
 JOB DESCRIPTION:
-${jobDescription}
+${jobDescription.substring(0, 2000)}
 
-Respond in this exact JSON format:
+Respond ONLY with this exact JSON format, no other text:
 {
-  "score": <number 0-100>,
-  "verdict": "<one sentence summary>",
-  "matching": ["skill1", "skill2", "skill3"],
-  "missing": ["skill1", "skill2", "skill3"],
-  "suggestions": ["suggestion1", "suggestion2", "suggestion3"]
-}
-Only respond with the JSON. No extra text.`;
+  "score": <integer 0-100>,
+  "verdict": "<one clear sentence about the match quality>",
+  "matching": ["<keyword1>", "<keyword2>", "<keyword3>", "<keyword4>", "<keyword5>"],
+  "missing": ["<keyword1>", "<keyword2>", "<keyword3>", "<keyword4>", "<keyword5>"],
+  "suggestions": ["<actionable tip 1>", "<actionable tip 2>", "<actionable tip 3>"]
+}`;
 
-    const result = await callGemini(prompt);
-    const clean = result.replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(clean);
-    res.json(parsed);
+    const rawText = await callGemini(prompt, 800);
+    const parsed = parseGeminiJSON(rawText);
+
+    // Validate and sanitise the response
+    const result = {
+      score: Math.min(100, Math.max(0, parseInt(parsed.score) || 0)),
+      verdict: String(parsed.verdict || 'Analysis complete.').substring(0, 200),
+      matching: Array.isArray(parsed.matching) ? parsed.matching.slice(0, 10).map(String) : [],
+      missing: Array.isArray(parsed.missing) ? parsed.missing.slice(0, 10).map(String) : [],
+      suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.slice(0, 5).map(String) : []
+    };
+
+    res.json(result);
   } catch (error) {
-    console.error('Job match error:', error);
-    res.status(500).json({ error: 'Analysis failed. Please try again.' });
+    console.error('Job match error:', error.message);
+    res.status(500).json({ error: 'Analysis failed: ' + error.message });
   }
 });
 
-// Quick Resume Builder — text/voice transcript to resume fields
+// ── AI: QUICK RESUME FROM TEXT ───────────────────────────────
 app.post('/ai/quick-resume', async (req, res) => {
-  const ip = req.ip;
+  const ip = req.ip || req.connection.remoteAddress;
   if (!checkRateLimit(ip)) {
     return res.status(429).json({ error: 'Rate limit exceeded. Try again in an hour.' });
   }
 
   const { text } = req.body;
-  if (!text) return res.status(400).json({ error: 'Missing text' });
+  if (!text || typeof text !== 'string' || text.trim().length < 5) {
+    return res.status(400).json({ error: 'Missing text' });
+  }
 
   try {
-    const prompt = `Extract resume information from this text and return it as JSON.
+    const prompt = `Extract resume information from this text and return ONLY JSON, no other text.
 
 TEXT:
-${text}
+${text.substring(0, 3000)}
 
-Return ONLY this JSON format:
+Return ONLY this JSON:
 {
   "fullName": "",
   "jobTitle": "",
@@ -335,46 +354,46 @@ Return ONLY this JSON format:
   "skills": [],
   "experiences": [{"title": "", "company": "", "start": "", "end": "", "desc": ""}],
   "educations": [{"degree": "", "school": "", "start": "", "end": ""}]
-}
-Fill in only what you can find. Leave others empty. Only respond with JSON.`;
+}`;
 
-    const result = await callGemini(prompt);
-    const clean = result.replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(clean);
+    const rawText = await callGemini(prompt, 1000);
+    const parsed = parseGeminiJSON(rawText);
     res.json(parsed);
   } catch (error) {
-    console.error('Quick resume error:', error);
-    res.status(500).json({ error: 'Could not process text. Please try again.' });
+    console.error('Quick resume error:', error.message);
+    res.status(500).json({ error: 'Could not process text: ' + error.message });
   }
 });
 
-// Achievement Improver
+// ── AI: IMPROVE ACHIEVEMENT ──────────────────────────────────
 app.post('/ai/improve-achievement', async (req, res) => {
-  const ip = req.ip;
+  const ip = req.ip || req.connection.remoteAddress;
   if (!checkRateLimit(ip)) {
     return res.status(429).json({ error: 'Rate limit exceeded. Try again in an hour.' });
   }
 
   const { achievement, jobTitle } = req.body;
-  if (!achievement) return res.status(400).json({ error: 'Missing achievement' });
+  if (!achievement || typeof achievement !== 'string') {
+    return res.status(400).json({ error: 'Missing achievement' });
+  }
 
   try {
-    const prompt = `Improve this resume bullet point to be more impactful and results-focused.
-Job title context: ${jobTitle || 'Professional'}
-Original: ${achievement}
+    const prompt = `Rewrite this resume bullet point to be more impactful. Start with a strong action verb. Add metrics if possible. Return ONLY the improved bullet point, nothing else.
 
-Return ONLY the improved version. One sentence. Start with a strong action verb. Include metrics if possible. No explanation.`;
+Job title: ${jobTitle || 'Professional'}
+Original: ${achievement}`;
 
-    const result = await callGemini(prompt);
-    res.json({ improved: result.trim() });
+    const result = await callGemini(prompt, 200);
+    res.json({ improved: result.trim().replace(/^["']|["']$/g, '') });
   } catch (error) {
-    res.status(500).json({ error: 'Could not improve achievement. Try again.' });
+    console.error('Improve achievement error:', error.message);
+    res.status(500).json({ error: 'Could not improve: ' + error.message });
   }
 });
 
-// Summary Generator
+// ── AI: GENERATE SUMMARY ─────────────────────────────────────
 app.post('/ai/generate-summary', async (req, res) => {
-  const ip = req.ip;
+  const ip = req.ip || req.connection.remoteAddress;
   if (!checkRateLimit(ip)) {
     return res.status(429).json({ error: 'Rate limit exceeded. Try again in an hour.' });
   }
@@ -383,24 +402,44 @@ app.post('/ai/generate-summary', async (req, res) => {
   if (!jobTitle) return res.status(400).json({ error: 'Missing job title' });
 
   try {
-    const prompt = `Write a professional resume summary for this person.
-Name: ${name || 'Professional'}
+    const prompt = `Write a 2-3 sentence professional resume summary. No first person. Start with the job title. Return ONLY the summary text.
+
 Job Title: ${jobTitle}
-Skills: ${(skills || []).join(', ')}
-Experience: ${experience || 'Not provided'}
+Skills: ${Array.isArray(skills) ? skills.join(', ') : (skills || '')}
+Experience context: ${experience || 'Not provided'}`;
 
-Write 2-3 sentences. Professional tone. No first person. Start with the job title. Return only the summary text.`;
-
-    const result = await callGemini(prompt);
+    const result = await callGemini(prompt, 300);
     res.json({ summary: result.trim() });
   } catch (error) {
-    res.status(500).json({ error: 'Could not generate summary. Try again.' });
+    console.error('Generate summary error:', error.message);
+    res.status(500).json({ error: 'Could not generate summary: ' + error.message });
   }
 });
 
+// ── TEST ENDPOINT (dev only) ─────────────────────────────────
+app.get('/test-gemini', async (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({ error: 'Disabled in production' });
+  }
+  try {
+    const result = await callGemini('Say hello in one word. Return only that word.');
+    res.json({ success: true, response: result });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/generate-test-code', (req, res) => {
+  if (process.env.NODE_ENV === 'production') {
+    return res.status(403).json({ error: 'Disabled in production' });
+  }
+  res.json({ code: generateActivationCode() });
+});
+
 // ============================================================
-// START SERVER
+// START
 // ============================================================
 app.listen(PORT, () => {
   console.log(`Prime Resume server running on port ${PORT}`);
+  console.log(`Gemini API key configured: ${GEMINI_API_KEY ? 'YES' : 'NO — AI features will fail'}`);
 });
