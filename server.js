@@ -137,7 +137,6 @@ async function callGemini(prompt, maxTokens = 1000) {
   // Try gemini-2.0-flash first, fall back to 1.5-flash
   const candidates = [
     { api: 'v1beta', model: 'gemini-2.0-flash' },
-    { api: 'v1beta', model: 'gemini-2.0-flash-lite' },
   ];
   let lastError = null;
 
@@ -158,12 +157,9 @@ async function callGemini(prompt, maxTokens = 1000) {
 
       if (!response.ok) {
         const errText = await response.text();
-        console.error(`[${api}] ${model} HTTP ${response.status}:`, errText.substring(0, 200));
+        console.error(`[${api}] ${model} HTTP ${response.status}:`, errText.substring(0, 300));
         if (response.status === 429) {
-          // Try next model after brief wait
-          await new Promise(r => setTimeout(r, 2000));
-          lastError = new Error('Rate limit — trying next model');
-          continue;
+          throw new Error('RATE_LIMITED');
         }
         lastError = new Error(`${model} HTTP ${response.status}`);
         continue;
@@ -322,6 +318,9 @@ Respond ONLY with this exact JSON format, no other text:
     res.json(result);
   } catch (error) {
     console.error('Job match error:', error.message);
+    if (error.message === 'RATE_LIMITED') {
+      return res.status(429).json({ error: 'The AI is busy right now. Please wait 30 seconds and try again.' });
+    }
     res.status(500).json({ error: 'Analysis failed: ' + error.message });
   }
 });
