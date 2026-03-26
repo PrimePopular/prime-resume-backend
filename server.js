@@ -152,7 +152,6 @@ async function callGemini(prompt, maxTokens = 1000) {
           generationConfig: {
             temperature: 0.4,
             maxOutputTokens: maxTokens,
-            topP: 0.8
           }
         })
       });
@@ -161,8 +160,10 @@ async function callGemini(prompt, maxTokens = 1000) {
         const errText = await response.text();
         console.error(`[${api}] ${model} HTTP ${response.status}:`, errText.substring(0, 200));
         if (response.status === 429) {
-          // Rate limit — don't try other models, they'll hit the same limit
-          throw new Error('AI rate limit reached. Please wait 60 seconds and try again.');
+          // Try next model after brief wait
+          await new Promise(r => setTimeout(r, 2000));
+          lastError = new Error('Rate limit — trying next model');
+          continue;
         }
         lastError = new Error(`${model} HTTP ${response.status}`);
         continue;
@@ -177,7 +178,6 @@ async function callGemini(prompt, maxTokens = 1000) {
 
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!text || text.trim() === '') {
-        console.error(`[${api}] ${model} returned empty text`);
         lastError = new Error('Empty response from model');
         continue;
       }
@@ -418,7 +418,30 @@ Experience context: ${experience || 'Not provided'}`;
   }
 });
 
-// ── DIAGNOSTIC: List available models ────────────────────────
+// ── PUBLIC TEST — diagnose Gemini connection ─────────────────
+app.get('/ping-gemini', async (req, res) => {
+  if (!GEMINI_API_KEY) {
+    return res.json({ ok: false, reason: 'GEMINI_API_KEY not set in environment' });
+  }
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: 'Say the word OK and nothing else.' }] }],
+          generationConfig: { maxOutputTokens: 10 }
+        })
+      }
+    );
+    const status = response.status;
+    const body = await response.text();
+    res.json({ ok: response.ok, status, body: body.substring(0, 500) });
+  } catch (err) {
+    res.json({ ok: false, error: err.message });
+  }
+});
 app.get('/list-models', async (req, res) => {
   if (!GEMINI_API_KEY) return res.status(500).json({ error: 'GEMINI_API_KEY not set' });
   const results = {};
