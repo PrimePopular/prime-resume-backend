@@ -135,56 +135,58 @@ async function callGemini(prompt, maxTokens = 1000) {
   }
 
   // Try gemini-2.0-flash first, fall back to 1.5-flash
-  const models = ['gemini-1.5-flash', 'gemini-1.5-flash-latest', 'gemini-1.5-pro'];
+  // Model list — ordered by preference. Uses v1 API (stable).
+  const candidates = [
+    { api: 'v1', model: 'gemini-1.5-flash-001' },
+    { api: 'v1', model: 'gemini-1.5-flash' },
+    { api: 'v1', model: 'gemini-1.0-pro' },
+    { api: 'v1beta', model: 'gemini-1.5-flash' },
+    { api: 'v1beta', model: 'gemini-pro' },
+  ];
   let lastError = null;
 
-  for (const model of models) {
+  for (const { api, model } of candidates) {
     try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0.4,
-              maxOutputTokens: maxTokens,
-              topP: 0.8
-            }
-          })
-        }
-      );
+      const url = `https://generativelanguage.googleapis.com/${api}/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.4,
+            maxOutputTokens: maxTokens,
+            topP: 0.8
+          }
+        })
+      });
 
       if (!response.ok) {
         const errText = await response.text();
-        console.error(`Gemini ${model} HTTP ${response.status}:`, errText);
-        lastError = new Error(`Gemini API error ${response.status}`);
-        continue; // try next model
+        console.error(`[${api}] ${model} HTTP ${response.status}:`, errText.substring(0, 200));
+        lastError = new Error(`${model} HTTP ${response.status}`);
+        continue;
       }
 
       const data = await response.json();
-
-      // Check for API-level errors
       if (data.error) {
-        console.error(`Gemini ${model} API error:`, data.error);
-        lastError = new Error(data.error.message || 'Gemini API error');
+        console.error(`[${api}] ${model} API error:`, data.error.message);
+        lastError = new Error(data.error.message);
         continue;
       }
 
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
       if (!text || text.trim() === '') {
-        console.error(`Gemini ${model} returned empty text. Full response:`, JSON.stringify(data));
-        lastError = new Error('Gemini returned empty response');
+        console.error(`[${api}] ${model} returned empty text`);
+        lastError = new Error('Empty response from model');
         continue;
       }
 
-      console.log(`Gemini ${model} success, response length: ${text.length}`);
+      console.log(`✅ [${api}] ${model} succeeded, chars: ${text.length}`);
       return text;
     } catch (err) {
-      console.error(`Gemini ${model} fetch error:`, err.message);
+      console.error(`[${api}] ${model} fetch error:`, err.message);
       lastError = err;
-      continue;
     }
   }
 
@@ -416,7 +418,28 @@ Experience context: ${experience || 'Not provided'}`;
   }
 });
 
-// ── TEST ENDPOINT (dev only) ─────────────────────────────────
+// ── DIAGNOSTIC: List available models ────────────────────────
+// Visit this URL to see which models your API key can access
+app.get('/list-models', async (req, res) => {
+  if (!GEMINI_API_KEY) {
+    return res.status(500).json({ error: 'GEMINI_API_KEY not set' });
+  }
+  try {
+    const r = await fetch(
+      `https://generativelanguage.googleapis.com/v1/models?key=${GEMINI_API_KEY}`
+    );
+    const data = await r.json();
+    if (data.error) return res.status(500).json({ error: data.error.message });
+    const models = (data.models || [])
+      .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
+      .map(m => m.name);
+    res.json({ available_models: models, count: models.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── TEST ENDPOINT ─────────────────────────────────────────────
 app.get('/test-gemini', async (req, res) => {
   if (process.env.NODE_ENV === 'production') {
     return res.status(403).json({ error: 'Disabled in production' });
