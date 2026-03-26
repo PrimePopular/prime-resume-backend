@@ -137,7 +137,6 @@ async function callGemini(prompt, maxTokens = 1000) {
   // Try gemini-2.0-flash first, fall back to 1.5-flash
   const candidates = [
     { api: 'v1beta', model: 'gemini-2.0-flash' },
-    { api: 'v1beta', model: 'gemini-2.0-flash-001' },
     { api: 'v1beta', model: 'gemini-2.0-flash-lite' },
   ];
   let lastError = null;
@@ -161,6 +160,10 @@ async function callGemini(prompt, maxTokens = 1000) {
       if (!response.ok) {
         const errText = await response.text();
         console.error(`[${api}] ${model} HTTP ${response.status}:`, errText.substring(0, 200));
+        if (response.status === 429) {
+          // Rate limit — don't try other models, they'll hit the same limit
+          throw new Error('AI rate limit reached. Please wait 60 seconds and try again.');
+        }
         lastError = new Error(`${model} HTTP ${response.status}`);
         continue;
       }
