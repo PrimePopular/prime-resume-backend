@@ -26,6 +26,9 @@ const {
   PORT = 3000
 } = process.env;
 
+// Groq API key (read directly from env since added after destructuring)
+// process.env.GROQ_API_KEY is used directly in callAI()
+
 // ============================================================
 // RATE LIMITING
 // ============================================================
@@ -127,70 +130,77 @@ async function sendActivationEmail(toEmail, toName, code) {
 }
 
 // ============================================================
-// GEMINI AI HELPER — with proper error handling
+// AI HELPER — Groq primary, Gemini fallback
 // ============================================================
-async function callGemini(prompt, maxTokens = 1000) {
-  if (!GEMINI_API_KEY) {
-    throw new Error('Gemini API key not configured on server');
-  }
+async function callAI(prompt, maxTokens = 1000) {
 
-  // Try gemini-2.0-flash first, fall back to 1.5-flash
-  const candidates = [
-    { api: 'v1beta', model: 'gemini-2.0-flash' },
-  ];
-  let lastError = null;
-
-  for (const { api, model } of candidates) {
+  // ── GROQ (primary) ────────────────────────────────────────
+  if (process.env.GROQ_API_KEY) {
     try {
-      const url = `https://generativelanguage.googleapis.com/${api}/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
-      const response = await fetch(url, {
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${process.env.GROQ_API_KEY}`
+        },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.4,
-            maxOutputTokens: maxTokens,
-          }
+          model: 'llama-3.1-8b-instant',
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: maxTokens,
+          temperature: 0.4
         })
       });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        console.error(`[${api}] ${model} HTTP ${response.status}:`, errText.substring(0, 300));
-        if (response.status === 429) {
-          throw new Error('RATE_LIMITED');
+      if (response.ok) {
+        const data = await response.json();
+        const text = data.choices?.[0]?.message?.content;
+        if (text && text.trim()) {
+          console.log(`✅ Groq success, chars: ${text.length}`);
+          return text;
         }
-        lastError = new Error(`${model} HTTP ${response.status}`);
-        continue;
+      } else {
+        const err = await response.text();
+        console.error(`Groq HTTP ${response.status}:`, err.substring(0, 200));
       }
-
-      const data = await response.json();
-      if (data.error) {
-        console.error(`[${api}] ${model} API error:`, data.error.message);
-        lastError = new Error(data.error.message);
-        continue;
-      }
-
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text || text.trim() === '') {
-        lastError = new Error('Empty response from model');
-        continue;
-      }
-
-      console.log(`✅ [${api}] ${model} succeeded, chars: ${text.length}`);
-      return text;
     } catch (err) {
-      console.error(`[${api}] ${model} fetch error:`, err.message);
-      lastError = err;
+      console.error('Groq error:', err.message);
     }
   }
 
-  throw lastError || new Error('All Gemini models failed');
+  // ── GEMINI fallback ───────────────────────────────────────
+  if (GEMINI_API_KEY) {
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.4, maxOutputTokens: maxTokens }
+          })
+        }
+      );
+      if (response.ok) {
+        const data = await response.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (text && text.trim()) {
+          console.log(`✅ Gemini fallback success, chars: ${text.length}`);
+          return text;
+        }
+      } else {
+        const err = await response.text();
+        console.error(`Gemini HTTP ${response.status}:`, err.substring(0, 200));
+      }
+    } catch (err) {
+      console.error('Gemini error:', err.message);
+    }
+  }
+
+  throw new Error('AI service unavailable. Please try again in a moment.');
 }
 
 // Safe JSON parser — strips markdown code fences
-function parseGeminiJSON(text) {
+function parseAIJSON(text) {
   if (!text || text.trim() === '') {
     throw new Error('Empty response from AI');
   }
@@ -303,8 +313,8 @@ Respond ONLY with this exact JSON format, no other text:
   "suggestions": ["<actionable tip 1>", "<actionable tip 2>", "<actionable tip 3>"]
 }`;
 
-    const rawText = await callGemini(prompt, 800);
-    const parsed = parseGeminiJSON(rawText);
+    const rawText = await callAI(prompt, 800);
+    const parsed = parseAIJSON(rawText);
 
     // Validate and sanitise the response
     const result = {
@@ -357,8 +367,8 @@ Return ONLY this JSON:
   "educations": [{"degree": "", "school": "", "start": "", "end": ""}]
 }`;
 
-    const rawText = await callGemini(prompt, 1000);
-    const parsed = parseGeminiJSON(rawText);
+    const rawText = await callAI(prompt, 1000);
+    const parsed = parseAIJSON(rawText);
     res.json(parsed);
   } catch (error) {
     console.error('Quick resume error:', error.message);
@@ -384,7 +394,7 @@ app.post('/ai/improve-achievement', async (req, res) => {
 Job title: ${jobTitle || 'Professional'}
 Original: ${achievement}`;
 
-    const result = await callGemini(prompt, 200);
+    const result = await callAI(prompt, 200);
     res.json({ improved: result.trim().replace(/^["']|["']$/g, '') });
   } catch (error) {
     console.error('Improve achievement error:', error.message);
@@ -409,7 +419,7 @@ Job Title: ${jobTitle}
 Skills: ${Array.isArray(skills) ? skills.join(', ') : (skills || '')}
 Experience context: ${experience || 'Not provided'}`;
 
-    const result = await callGemini(prompt, 300);
+    const result = await callAI(prompt, 300);
     res.json({ summary: result.trim() });
   } catch (error) {
     console.error('Generate summary error:', error.message);
@@ -465,7 +475,7 @@ app.get('/test-gemini', async (req, res) => {
     return res.status(403).json({ error: 'Disabled in production' });
   }
   try {
-    const result = await callGemini('Say hello in one word. Return only that word.');
+    const result = await callAI('Say hello in one word. Return only that word.');
     res.json({ success: true, response: result });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
