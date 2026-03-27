@@ -402,6 +402,25 @@ Original: ${achievement}`;
   }
 });
 
+// ── AI: COVER LETTER ─────────────────────────────────────────
+app.post('/ai/cover-letter', async (req, res) => {
+  const ip = req.ip || req.connection.remoteAddress;
+  if (!checkRateLimit(ip)) {
+    return res.status(429).json({ error: 'Rate limit exceeded. Try again in an hour.' });
+  }
+  const { prompt, maxTokens } = req.body;
+  if (!prompt || typeof prompt !== 'string' || prompt.trim().length < 10) {
+    return res.status(400).json({ error: 'Missing prompt' });
+  }
+  try {
+    const text = await callAI(prompt, maxTokens || 600);
+    res.json({ text: text.trim() });
+  } catch (error) {
+    console.error('Cover letter error:', error.message);
+    res.status(500).json({ error: 'Could not generate cover letter: ' + error.message });
+  }
+});
+
 // ── AI: GENERATE SUMMARY ─────────────────────────────────────
 app.post('/ai/generate-summary', async (req, res) => {
   const ip = req.ip || req.connection.remoteAddress;
