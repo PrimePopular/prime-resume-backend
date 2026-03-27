@@ -376,6 +376,44 @@ Return ONLY this JSON:
   }
 });
 
+// ── AI: IMPROVE SUMMARY ──────────────────────────────────────
+app.post('/ai/improve-summary', async (req, res) => {
+  const ip = req.ip || req.connection.remoteAddress;
+  if (!checkRateLimit(ip)) {
+    return res.status(429).json({ error: 'Rate limit exceeded. Try again in an hour.' });
+  }
+  const { summary, jobTitle, skills } = req.body;
+  if (!summary || typeof summary !== 'string' || summary.trim().length < 10) {
+    return res.status(400).json({ error: 'Missing summary' });
+  }
+  try {
+    const prompt = `You are an expert resume writer. Improve this professional summary to be more compelling and ATS-friendly.
+
+CURRENT SUMMARY:
+${summary}
+
+CONTEXT:
+Job Title: ${jobTitle || 'Not specified'}
+Key Skills: ${skills || 'Not specified'}
+
+RULES:
+- Keep the person's authentic voice and specific details — do NOT genericise
+- Remove clichés: "passionate", "results-driven", "team player", "dynamic", "go-getter", "detail-oriented", "hard worker"
+- Start with the job title or a strong action/achievement statement
+- Include specific numbers or impact if present in the original
+- Make it ATS-friendly: use industry-standard terms naturally
+- Keep it 2-4 sentences, 50-100 words
+- Sound human, not like a bot wrote it
+- Return ONLY the improved summary. No explanation. No quotes.`;
+
+    const result = await callAI(prompt, 300);
+    res.json({ improved: result.trim().replace(/^["']|["']$/g, '') });
+  } catch (error) {
+    console.error('Improve summary error:', error.message);
+    res.status(500).json({ error: 'Could not improve summary: ' + error.message });
+  }
+});
+
 // ── AI: IMPROVE ACHIEVEMENT ──────────────────────────────────
 app.post('/ai/improve-achievement', async (req, res) => {
   const ip = req.ip || req.connection.remoteAddress;
